@@ -73,6 +73,7 @@ def _preprocess_yolo(img, input_shape, letter_box=False):
         img = np.full((input_shape[0], input_shape[1], 3), 127, dtype=np.uint8)
         img[offset_h:(offset_h + new_h), offset_w:(offset_w + new_w), :] = resized
     else:
+        # print("img resize-before:", img.shape[:-1])
         img = cv2.resize(img, (input_shape[1], input_shape[0]))
 
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)

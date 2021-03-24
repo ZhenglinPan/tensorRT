@@ -90,13 +90,23 @@ class BBoxVisualization():
 
     def draw_bboxes(self, img, boxes, confs, clss):
         """Draw detected bounding boxes on the original image."""
-        for bb, cf, cl in zip(boxes, confs, clss):
+        # boxes is an array with index at the last col
+        cnt = 0
+        for bb, cf, cl in zip(boxes[:, :-1].tolist(), confs, clss):
+            
             cl = int(cl)
+            
             x_min, y_min, x_max, y_max = bb[0], bb[1], bb[2], bb[3]
+            
             color = self.colors[cl]
             cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color, 2)
+            
             txt_loc = (max(x_min+2, 0), max(y_min+2, 0))
             cls_name = self.cls_dict.get(cl, 'CLS{}'.format(cl))
             txt = '{} {:.2f}'.format(cls_name, cf)
+            txt = txt + 'index:' + str(boxes[cnt, -1]) # 加上个体序号
+            
             img = draw_boxed_text(img, txt, txt_loc, color)
+            cnt += 1
+        
         return img
