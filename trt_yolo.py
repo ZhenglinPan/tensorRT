@@ -9,7 +9,7 @@ import os
 import time
 import argparse
 
-from cv2 import cv2
+import cv2
 import pycuda.autoinit  # This is needed for initializing CUDA driver
 
 from utils.yolo_classes import get_cls_dict
@@ -27,6 +27,7 @@ def parse_args():
     desc = ('Capture and display live camera video, while doing '
             'real-time object detection with TensorRT optimized '
             'YOLO model on Jetson')
+    '''description = python3 trt_yolo.py --usb 0 -m yolov4-tiny-288'''
     parser = argparse.ArgumentParser(description=desc)
     parser = add_camera_args(parser)
     parser.add_argument(

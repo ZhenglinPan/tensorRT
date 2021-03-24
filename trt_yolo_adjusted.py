@@ -19,7 +19,6 @@ from utils.display import open_window, set_display, show_fps
 from utils.visualization import BBoxVisualization
 from utils.yolo_with_plugins import get_input_shape, TrtYOLO
 
-
 WINDOW_NAME = 'TrtYOLODemo'
 
 kalman_list = []
@@ -100,8 +99,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
         if img is None:
             break
         boxes, confs, clss = trt_yolo.detect(img, conf_th)  # 最重要的一行
-        # boxes, confs, clss = obj_filter(boxes, confs, clss)
-        
+        boxes, confs, clss = obj_filter(boxes, confs, clss)        
         img = vis.draw_bboxes(img, boxes, confs, clss)
         img = show_fps(img, fps)
         cv2.imshow(WINDOW_NAME, img)
