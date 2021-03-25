@@ -1,9 +1,4 @@
-"""trt_yolo.py
-
-This script demonstrates how to do real-time object detection with
-TensorRT optimized YOLO engine.
-"""
-
+# -*- UFT-8 -*- #
 
 import os
 import time
@@ -22,7 +17,16 @@ from utils.yolo_with_plugins import get_input_shape, TrtYOLO
 WINDOW_NAME = 'TrtYOLODemo'
 START_FRAME = 10
 
-kalman_list = []
+
+
+# Kalman滤波器初始化
+kalman = cv2.KalmanFilter(4, 2) # 4：状态数，包括（x，y，dx，dy）坐标及速度（每次移动的距离）；2：观测量，能看到的是坐标值
+kalman.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32) # 系统测量矩阵H
+kalman.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32) # 状态转移矩阵A
+kalman.processNoiseCov = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)*0.03 # 系统过程噪声协方差
+last_measurement = current_measurement = np.array((2, 1), np.float32)
+last_prediction = current_prediction = np.zeros((2, 1), np.float32)
+
 
 # 解析终端输入字符串
 def parse_args():
@@ -46,6 +50,22 @@ def parse_args():
         help='inference with letterboxed image [False]')
     args = parser.parse_args()
     return args
+
+
+def kalman_prediction(measurement):  # measurement is like [[x], [y]]
+    global current_measurement, last_measurement, current_prediction, last_prediction
+    last_prediction = current_prediction 
+    last_measurement = current_measurement 
+    current_measurement = np.array([[np.float32(measurement[0])], [np.float32(measurement[1])]]) 
+    kalman.correct(current_measurement)
+    current_prediction = kalman.predict()
+
+    lmx, lmy = last_measurement[0], last_measurement[1]
+    cmx, cmy = current_measurement[0], current_measurement[1]
+    lpx, lpy = last_prediction[0], last_prediction[1]
+    cpx, cpy = current_prediction[0], current_prediction[1]
+
+    return [int(cpx), int(cpy)]
 
 
 # 筛选出行人类别
@@ -95,6 +115,8 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
     full_scrn = False
     frame_cnt = 0
     capture = cv2.VideoCapture("E1.mp4")
+    fps = 0.0
+    tic = time.time()
     pv_detection = []
     while True:
         if cv2.getWindowProperty(WINDOW_NAME, 0) < 0:
@@ -104,14 +126,12 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
         if frame is None:
             break
 
-        fps = 0.0
-        tic = time.time()
         if frame_cnt > START_FRAME:
             if frame_cnt == START_FRAME + 1:
                 matching_area = frame
 
             boxes, confs, clss = trt_yolo.detect(matching_area, conf_th)
-            print("detect_boxes", boxes)
+            # print("detect_boxes", boxes)
             boxes, confs, clss = obj_filter(boxes, confs, clss)     # boxes --np.array() [[p, p, p, p, index], ...]
 
             if frame_cnt > START_FRAME + 1:
@@ -123,7 +143,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
                         boxes[i][0:2] = np.add(boxes[i][0:2], np.array(matching_area_top_left))
                         boxes[i][2:4] = np.add(boxes[i][2:4], np.array(matching_area_top_left))
 
-            print("boxes before drawig:", boxes)
+            # print("boxes before drawig:", boxes)
             img = vis.draw_bboxes(frame, boxes, confs, clss)
             img = show_fps(img, fps)
             cv2.imshow(WINDOW_NAME, img)
@@ -143,6 +163,16 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             matching_area_bottom_right = [0, 0]
             matching_area_top_left[0] = box[0] - int(0.75*roi_w)
             matching_area_top_left[1] = box[1] - int(0.25*roi_h)
+            
+            # apply kalman filter
+            if frame_cnt > START_FRAME + 20:
+                matching_area_top_left_measurement = matching_area_top_left
+                matching_area_top_left = kalman_prediction([[matching_area_top_left[0]], 
+                                                            [matching_area_top_left[1]]])
+                # print(np.subtract(np.array(matching_area_top_left), np.array(matching_area_top_left_measurement)))
+            else:
+                dump = kalman_prediction([[matching_area_top_left[0]], [matching_area_top_left[1]]])
+            
             matching_area_bottom_right[0] = box[2] + int(0.75*roi_w)
             matching_area_bottom_right[1] = box[3] + int(0.25*roi_h)
             # 越界处理
