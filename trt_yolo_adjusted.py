@@ -15,7 +15,7 @@ from utils.visualization import BBoxVisualization
 from utils.yolo_with_plugins import get_input_shape, TrtYOLO
 
 WINDOW_NAME = 'TrtYOLODemo'
-START_FRAME = 10
+START_FRAME = 5
 
 # Kalman滤波器初始化
 kalman = cv2.KalmanFilter(4, 2) # 4：状态数，包括（x，y，dx，dy）坐标及速度（每次移动的距离）；2：观测量，能看到的是坐标值
@@ -109,6 +109,30 @@ def find_max_box(boxes):
     return np.array(max_box)
 
 
+def similarity(img1, img2):
+    # high similarity at less value
+    img1 = cv2.resize(img1, (16, 16))
+    img2 = cv2.resize(img2, (16, 16))
+    return np.sum(np.square(np.subtract(img1, img2)))
+
+
+def find_best_box(boxes, img, tpl):
+    mat_list = []
+    sml_list = []
+    for box in boxes:
+        mat = img[box[1]:box[3], box[0]:box[2]]
+        mat_list.append(mat)
+        
+        sml = similarity(mat, tpl)
+        sml_list.append(sml)
+    
+    print("sml_list", sml_list)
+    best_mat = mat_list[sml_list.index(min(sml_list))]
+    best_box = boxes[mat_list.index(best_mat)]
+
+    return np.array(best_box)
+
+
 # 循环检测主函数
 def loop_and_detect(cam, trt_yolo, conf_th, vis):
     full_scrn = False
@@ -153,19 +177,19 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             
             # nominate desirable object
             if frame_cnt == START_FRAME + 1:
-                # 根据键入数字选择目标
-                # print("Select the target you want.")
-                # nmn = int(cv2.waitKey(0)) - 176
-                nmn = 0
+                print("Select the target you want.")
+                nmn = int(cv2.waitKey(0)) - 176
                 box = boxes[int(np.argwhere(boxes[:, -1] == int(nmn))), :-1]    # box --np.array() [p, p, p, p]
             else:
-                # 根据ROI区域内检测结果大小选择目标
-                box = find_max_box(boxes)
+                box = find_best_box(boxes, frame, template)
 
             roi = frame[box[1]:box[3], box[0]:box[2]]
+            if frame_cnt == START_FRAME + 1:
+                template = roi.copy()
+
             roi_h, roi_w = roi.shape[:-1]
-            if roi_h < int(0.2*frame_h):
-                roi_w = int(0.2*frame_h)
+            if roi_h < int(0.5*frame_h):
+                roi_h = int(0.5*frame_h)
             if roi_w < int(0.2*frame_w):
                 roi_w = int(0.2*frame_w)
 
@@ -173,7 +197,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             matching_area_bottom_right = [0, 0]
             matching_area_top_left[0] = box[0] - int(0.75*roi_w)
             matching_area_top_left[1] = box[1] - int(0.25*roi_h)
-            
+
             # apply kalman filter
             if frame_cnt > START_FRAME + 20:
                 matching_area_top_left_measurement = matching_area_top_left
@@ -185,6 +209,8 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             
             matching_area_bottom_right[0] = box[2] + int(0.75*roi_w)
             matching_area_bottom_right[1] = box[3] + int(0.25*roi_h)
+            # print("area height", abs(matching_area_top_left[1] - matching_area_bottom_right[1]))
+            # print("area width", abs(matching_area_top_left[0] - matching_area_bottom_right[0]))
             # 越界处理
             for i in range(len(matching_area_top_left)):
                 if  matching_area_top_left[i] < 0:
@@ -206,7 +232,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
 
             pv_detection = [boxes, confs, clss]
 
-        cv2.waitKey(0)
+        # cv2.waitKey(0)
         key = cv2.waitKey(1)
         if key == 27 or key == ord(' '):  # ESC key: quit program
             break

@@ -1,6 +1,7 @@
 import numpy as np
 
 b = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]]
+print(np.sum(np.square(b)))
 # clss = [0, 0, 1, 1]
 # idxs = [i for i, c in enumerate(clss) if c == 0]
 # print([b[x] for x in idxs])
