@@ -17,8 +17,6 @@ from utils.yolo_with_plugins import get_input_shape, TrtYOLO
 WINDOW_NAME = 'TrtYOLODemo'
 START_FRAME = 10
 
-
-
 # Kalman滤波器初始化
 kalman = cv2.KalmanFilter(4, 2) # 4：状态数，包括（x，y，dx，dy）坐标及速度（每次移动的距离）；2：观测量，能看到的是坐标值
 kalman.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32) # 系统测量矩阵H
@@ -52,6 +50,7 @@ def parse_args():
     return args
 
 
+# 添加Kalman滤波
 def kalman_prediction(measurement):  # measurement is like [[x], [y]]
     global current_measurement, last_measurement, current_prediction, last_prediction
     last_prediction = current_prediction 
@@ -125,6 +124,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
         ret, frame = capture.read()
         if frame is None:
             break
+        frame_h, frame_w = frame.shape[:-1]
 
         if frame_cnt > START_FRAME:
             if frame_cnt == START_FRAME + 1:
@@ -142,22 +142,32 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
                     for i in range(len(boxes)):
                         boxes[i][0:2] = np.add(boxes[i][0:2], np.array(matching_area_top_left))
                         boxes[i][2:4] = np.add(boxes[i][2:4], np.array(matching_area_top_left))
-
-            # print("boxes before drawig:", boxes)
-            img = vis.draw_bboxes(frame, boxes, confs, clss)
+            # 绘图
+            if frame_cnt == START_FRAME + 1:
+                img = vis.draw_bboxes(frame, boxes, confs, clss, 0, 0)
+            else:
+                img = vis.draw_bboxes(frame, boxes, confs, clss, 
+                                        matching_area_top_left, matching_area_bottom_right)
             img = show_fps(img, fps)
             cv2.imshow(WINDOW_NAME, img)
             
             # nominate desirable object
-            if frame_cnt == START_FRAME + 1:  # 根据键入数字选择目标
-                # nmn = input("Select the target you want.")
+            if frame_cnt == START_FRAME + 1:
+                # 根据键入数字选择目标
+                # print("Select the target you want.")
+                # nmn = int(cv2.waitKey(0)) - 176
                 nmn = 0
-                box = boxes[int(np.argwhere(boxes[:, -1] == int(nmn))), :-1] # 根据最后一列的索引确定目标 box --np.array()[p, p, p, p]
-            else:   # 根据ROI区域内检测结果大小选择目标
+                box = boxes[int(np.argwhere(boxes[:, -1] == int(nmn))), :-1]    # box --np.array() [p, p, p, p]
+            else:
+                # 根据ROI区域内检测结果大小选择目标
                 box = find_max_box(boxes)
 
             roi = frame[box[1]:box[3], box[0]:box[2]]
             roi_h, roi_w = roi.shape[:-1]
+            if roi_h < int(0.2*frame_h):
+                roi_w = int(0.2*frame_h)
+            if roi_w < int(0.2*frame_w):
+                roi_w = int(0.2*frame_w)
 
             matching_area_top_left = [0, 0]
             matching_area_bottom_right = [0, 0]
@@ -186,7 +196,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             # 切片 [高, 宽]
             matching_area = frame[matching_area_top_left[1]:matching_area_bottom_right[1], 
                                 matching_area_top_left[0]:matching_area_bottom_right[0]]
-            cv2.imshow("matching_area", matching_area)
+            # cv2.imshow("matching_area", matching_area)
 
             toc = time.time()
             curr_fps = 1.0 / (toc - tic)
@@ -227,7 +237,7 @@ def main():
         WINDOW_NAME, 'Camera TensorRT YOLO Demo',
         cam.img_width, cam.img_height)
     
-    loop_and_detect(cam, trt_yolo, conf_th=0.3, vis=vis)
+    loop_and_detect(cam, trt_yolo, conf_th=0.7, vis=vis)
 
     cam.release()
     cv2.destroyAllWindows()
