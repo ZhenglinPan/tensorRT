@@ -1,4 +1,7 @@
 # -*- UFT-8 -*- #
+'''python3 trt_yolo_adjusted.py --video ~/Downloads/E1.mp4 -m yolov4-tiny-288'''
+# 代码BUG 起始的时候没有检测到目标就会报错！
+# 降低分辨率提高检测速度
 
 import os
 import time
@@ -8,6 +11,7 @@ import cv2
 import numpy as np
 import pycuda.autoinit  # This is needed for initializing CUDA driver
 
+from skimage.measure import compare_ssim
 from utils.yolo_classes import get_cls_dict
 from utils.camera import add_camera_args, Camera
 from utils.display import open_window, set_display, show_fps
@@ -16,12 +20,14 @@ from utils.yolo_with_plugins import get_input_shape, TrtYOLO
 
 WINDOW_NAME = 'TrtYOLODemo'
 START_FRAME = 5
+VIDEOPATH = "w_.mp4"
+face_detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 
 # Kalman滤波器初始化
 kalman = cv2.KalmanFilter(4, 2) # 4：状态数，包括（x，y，dx，dy）坐标及速度（每次移动的距离）；2：观测量，能看到的是坐标值
 kalman.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32) # 系统测量矩阵H
 kalman.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32) # 状态转移矩阵A
-kalman.processNoiseCov = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)*0.03 # 系统过程噪声协方差
+kalman.processNoiseCov = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)*0.01 # 系统过程噪声协方差 越小越平滑 但误差越大
 last_measurement = current_measurement = np.array((2, 1), np.float32)
 last_prediction = current_prediction = np.zeros((2, 1), np.float32)
 
@@ -109,6 +115,7 @@ def find_max_box(boxes):
     return np.array(max_box)
 
 
+# 使用欧式与第一帧目标进行匹配
 def similarity(img1, img2):
     # high similarity at less value
     img1 = cv2.resize(img1, (16, 16))
@@ -116,6 +123,19 @@ def similarity(img1, img2):
     return np.sum(np.square(np.subtract(img1, img2)))
 
 
+# 使用现成的包计算与第一帧的相似度  与欧式二选一
+def skimageCmp(img1, img2):
+    img1 = cv2.resize(img1, (16, 16))
+    img2 = cv2.resize(img2, (16, 16))
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    score, diff = compare_ssim(img1, img2, full=True)
+
+    return round(score, 3)
+
+
+# 筛选Matching area中的目标
 def find_best_box(boxes, img, tpl):
     mat_list = []
     sml_list = []
@@ -123,6 +143,7 @@ def find_best_box(boxes, img, tpl):
         mat = img[box[1]:box[3], box[0]:box[2]]
         mat_list.append(mat)
         
+        # 由于scikit-image版本不是1.4.2或1.5.0无法运行
         sml = similarity(mat, tpl)
         sml_list.append(sml)
     
@@ -133,18 +154,32 @@ def find_best_box(boxes, img, tpl):
     return np.array(best_box)
 
 
+# 人脸检测 姿态判断
+def judge(roughList, preRes):
+    # acquire last 6 points, plus effect from last judgement
+    roughList.append(2*preRes)
+    print(roughList)
+    if np.average(roughList) <= 0.4:
+        res = 0
+    else:
+        res = 1
+    
+    roughList.pop(0)
+    roughList.pop(-1)
+    
+
 # 循环检测主函数
 def loop_and_detect(cam, trt_yolo, conf_th, vis):
     full_scrn = False
     frame_cnt = 0
-    capture = cv2.VideoCapture("E1.mp4")
+    capture = cv2.VideoCapture(VIDEOPATH)
     fps = 0.0
     tic = time.time()
     pv_detection = []
+    resList = []
     while True:
         if cv2.getWindowProperty(WINDOW_NAME, 0) < 0:
             break
-        # frame = cam.read()
         ret, frame = capture.read()
         if frame is None:
             break
@@ -174,7 +209,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
                                         matching_area_top_left, matching_area_bottom_right)
             img = show_fps(img, fps)
             cv2.imshow(WINDOW_NAME, img)
-            
+  
             # nominate desirable object
             if frame_cnt == START_FRAME + 1:
                 print("Select the target you want.")
@@ -195,8 +230,8 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
 
             matching_area_top_left = [0, 0]
             matching_area_bottom_right = [0, 0]
-            matching_area_top_left[0] = box[0] - int(0.75*roi_w)
-            matching_area_top_left[1] = box[1] - int(0.25*roi_h)
+            matching_area_top_left[0] = box[0] - int(0.25*roi_w)
+            matching_area_top_left[1] = box[1] - int(0.15*roi_h)
 
             # apply kalman filter
             if frame_cnt > START_FRAME + 20:
@@ -207,8 +242,8 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             else:
                 dump = kalman_prediction([[matching_area_top_left[0]], [matching_area_top_left[1]]])
             
-            matching_area_bottom_right[0] = box[2] + int(0.75*roi_w)
-            matching_area_bottom_right[1] = box[3] + int(0.25*roi_h)
+            matching_area_bottom_right[0] = box[2] + int(0.25*roi_w)
+            matching_area_bottom_right[1] = box[3] + int(0.15*roi_h)
             # print("area height", abs(matching_area_top_left[1] - matching_area_bottom_right[1]))
             # print("area width", abs(matching_area_top_left[0] - matching_area_bottom_right[0]))
             # 越界处理
@@ -223,6 +258,30 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             matching_area = frame[matching_area_top_left[1]:matching_area_bottom_right[1], 
                                 matching_area_top_left[0]:matching_area_bottom_right[0]]
             # cv2.imshow("matching_area", matching_area)
+
+            # 人脸检测部分  速度超慢
+            # gray = cv2.cvtColor(matching_area, code=cv2.COLOR_BGR2GRAY)
+            # face_zone = face_detector.detectMultiScale(gray, scaleFactor = 1.1, minNeighbors = 5)
+            # resList.append(len(face_zone))
+            # if frame_cnt > START_FRAME + 5:
+            #     preRes=ges
+            #     ges = judge(resList, preRes)
+            #     if 1 == ges:
+            #         cv2.putText(matching_area, "front", (10,10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (132, 255, 255), 1)
+            #     else:
+            #         cv2.putText(matching_area, "back", (10,10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 152), 1)
+            # else:
+            #         preRes = 0
+            #         ges = 0            
+        
+            # f_num = 0
+            # for x, y, w, h in face_zone:
+            #     f_num = f_num + 1
+            #     cv2.rectangle(matching_area, pt1 = (x, y), pt2 = (x+w, y+h), color = [255,255,255], thickness=1)
+            #     cv2.putText(matching_area, str(f_num), (x,y), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 1)
+            # cv2.putText(matching_area, "{}people".format(f_num), (10,50), cv2.FONT_HERSHEY_COMPLEX, 1, (142, 125, 52), 1)
+            # cv2.imshow('result', matching_area) # 这里由于显示在frame上有点麻烦  所以直接show出来了
+
 
             toc = time.time()
             curr_fps = 1.0 / (toc - tic)

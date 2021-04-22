@@ -2,3 +2,5 @@ googlenet
 mtcnn
 ssd
 yolo
+*.mp4
+*.zip

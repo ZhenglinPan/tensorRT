@@ -98,7 +98,9 @@ class BBoxVisualization():
             
             color = self.colors[cl]
             cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color, 2)
+            # cv2.imwrite('E2a/'+str(cf)+'.jpg', img[y_min:y_max, x_min:x_max]) # 保存检测区域
             if matf != 0:
+              cv2.putText(img, 'Matching Area', (matf[0], matf[1]), FONT, TEXT_SCALE, WHITE, thickness=TEXT_THICKNESS, lineType=cv2.LINE_8)
               cv2.rectangle(img, (matf[0], matf[1]), (mabt[0], mabt[1]), (255, 255, 255), 1)
             txt_loc = (max(x_min+2, 0), max(y_min+2, 0))
             cls_name = self.cls_dict.get(cl, 'CLS{}'.format(cl))
