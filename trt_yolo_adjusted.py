@@ -1,5 +1,7 @@
 # -*- UFT-8 -*- #
-'''python3 trt_yolo_adjusted.py --video ~/Downloads/E1.mp4 -m yolov4-tiny-288'''
+'''
+python3 trt_yolo_adjusted.py --video ~/Downloads/E1.mp4 -m yolov4-tiny-288
+'''
 # 代码BUG 起始的时候没有检测到目标就会报错！
 # 降低分辨率提高检测速度
 
@@ -11,16 +13,25 @@ import cv2
 import numpy as np
 import pycuda.autoinit  # This is needed for initializing CUDA driver
 
-from skimage.measure import compare_ssim
+# from skimage.measure import compare_ssim
 from utils.yolo_classes import get_cls_dict
 from utils.camera import add_camera_args, Camera
 from utils.display import open_window, set_display, show_fps
 from utils.visualization import BBoxVisualization
 from utils.yolo_with_plugins import get_input_shape, TrtYOLO
 
+from queue import Queue
+from threading import Thread
+
+
+import serial
+port = "/dev/ttyACM0"
+ser = serial.Serial(port,9600,timeout=0)
+ser.flushInput()
+
 WINDOW_NAME = 'TrtYOLODemo'
 START_FRAME = 5
-VIDEOPATH = "w_.mp4"
+VIDEOPATH = "E1.mp4"
 face_detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 
 # Kalman滤波器初始化
@@ -74,7 +85,7 @@ def kalman_prediction(measurement):  # measurement is like [[x], [y]]
 
 
 # 筛选出行人类别
-def obj_filter(boxes, confs, clss):
+def person_filter(boxes, confs, clss):
     '''
     boxes: 
     [[ 552   73  708  429]      
@@ -103,18 +114,6 @@ def obj_filter(boxes, confs, clss):
     return boxes, confs, clss
 
 
-def find_max_box(boxes):
-    boxes = boxes.tolist()
-    # calculate areas of boundingboxes
-    area_list = []
-    for box in boxes:
-        box_area = (box[1]-box[3])*(box[0]-box[2])
-        area_list.append(box_area)
-    area_list.index(sorted(area_list)[-1])
-    max_box = boxes[area_list.index(max(area_list))][:-1]
-    return np.array(max_box)
-
-
 # 使用欧式与第一帧目标进行匹配
 def similarity(img1, img2):
     # high similarity at less value
@@ -124,15 +123,15 @@ def similarity(img1, img2):
 
 
 # 使用现成的包计算与第一帧的相似度  与欧式二选一
-def skimageCmp(img1, img2):
-    img1 = cv2.resize(img1, (16, 16))
-    img2 = cv2.resize(img2, (16, 16))
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+# def skimageCmp(img1, img2):
+#     img1 = cv2.resize(img1, (16, 16))
+#     img2 = cv2.resize(img2, (16, 16))
+#     img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+#     img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
-    score, diff = compare_ssim(img1, img2, full=True)
+#     score, diff = compare_ssim(img1, img2, full=True)
 
-    return round(score, 3)
+#     return round(score, 3)
 
 
 # 筛选Matching area中的目标
@@ -147,7 +146,7 @@ def find_best_box(boxes, img, tpl):
         sml = similarity(mat, tpl)
         sml_list.append(sml)
     
-    print("sml_list", sml_list)
+    # print("sml_list", sml_list)
     best_mat = mat_list[sml_list.index(min(sml_list))]
     best_box = boxes[mat_list.index(best_mat)]
 
@@ -158,7 +157,7 @@ def find_best_box(boxes, img, tpl):
 def judge(roughList, preRes):
     # acquire last 6 points, plus effect from last judgement
     roughList.append(2*preRes)
-    print(roughList)
+    # print(roughList)
     if np.average(roughList) <= 0.4:
         res = 0
     else:
@@ -169,20 +168,25 @@ def judge(roughList, preRes):
     
 
 # 循环检测主函数
-def loop_and_detect(cam, trt_yolo, conf_th, vis):
-    full_scrn = False
-    frame_cnt = 0
-    capture = cv2.VideoCapture(VIDEOPATH)
+def loop_and_detect(cam, trt_yolo, msg_queue, conf_th, vis):
+    
     fps = 0.0
+    resList = []
+    frame_cnt = 0
     tic = time.time()
     pv_detection = []
-    resList = []
+    full_scrn = False
+    
+    capture = cv2.VideoCapture(VIDEOPATH)
+
     while True:
         if cv2.getWindowProperty(WINDOW_NAME, 0) < 0:
             break
+
         ret, frame = capture.read()
         if frame is None:
             break
+
         frame_h, frame_w = frame.shape[:-1]
 
         if frame_cnt > START_FRAME:
@@ -190,17 +194,18 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
                 matching_area = frame
 
             boxes, confs, clss = trt_yolo.detect(matching_area, conf_th)
-            # print("detect_boxes", boxes)
-            boxes, confs, clss = obj_filter(boxes, confs, clss)     # boxes --np.array() [[p, p, p, p, index], ...]
+
+            boxes, confs, clss = person_filter(boxes, confs, clss)     # boxes --np.array() [[p, p, p, p, index], ...]
 
             if frame_cnt > START_FRAME + 1:
                 if len(boxes) == 0:
-                    print("boxes after_filter is empty!")
+                    # print("boxes after_filter is empty!")
                     boxes, confs, clss = pv_detection[:]
                 else:
                     for i in range(len(boxes)):
                         boxes[i][0:2] = np.add(boxes[i][0:2], np.array(matching_area_top_left))
                         boxes[i][2:4] = np.add(boxes[i][2:4], np.array(matching_area_top_left))
+
             # 绘图
             if frame_cnt == START_FRAME + 1:
                 img = vis.draw_bboxes(frame, boxes, confs, clss, 0, 0)
@@ -218,6 +223,17 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             else:
                 box = find_best_box(boxes, frame, template)
 
+            #串口数据  定点数转换
+            ltx, lty, rbx, rby = box[:4]    # ltx --left top point x
+            shift_x = int(round((ltx + rbx)/(2 * frame_w), 4) * 10000)
+            shift_y = int(round((lty + rby)/(2 * frame_h), 4) * 10000)
+            area_ratio = int(round((rbx-ltx)*(rby-lty)/(frame_w*frame_h), 4) * 10000)
+            ges = -1
+            
+            msg = str(shift_x) + ', ' + str(shift_y)+ ', ' + str(area_ratio) + ', ' + str(ges)
+            print("msg in python:", msg)
+            msg_queue.put(msg.encode())     # 将字符转换为字节发送
+
             roi = frame[box[1]:box[3], box[0]:box[2]]
             if frame_cnt == START_FRAME + 1:
                 template = roi.copy()
@@ -230,8 +246,8 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
 
             matching_area_top_left = [0, 0]
             matching_area_bottom_right = [0, 0]
-            matching_area_top_left[0] = box[0] - int(0.25*roi_w)
-            matching_area_top_left[1] = box[1] - int(0.15*roi_h)
+            matching_area_top_left[0] = box[0] - int(0.5*roi_w)
+            matching_area_top_left[1] = box[1] - int(0.25*roi_h)
 
             # apply kalman filter
             if frame_cnt > START_FRAME + 20:
@@ -242,10 +258,9 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             else:
                 dump = kalman_prediction([[matching_area_top_left[0]], [matching_area_top_left[1]]])
             
-            matching_area_bottom_right[0] = box[2] + int(0.25*roi_w)
-            matching_area_bottom_right[1] = box[3] + int(0.15*roi_h)
-            # print("area height", abs(matching_area_top_left[1] - matching_area_bottom_right[1]))
-            # print("area width", abs(matching_area_top_left[0] - matching_area_bottom_right[0]))
+            matching_area_bottom_right[0] = box[2] + int(0.5*roi_w)
+            matching_area_bottom_right[1] = box[3] + int(0.25*roi_h)
+
             # 越界处理
             for i in range(len(matching_area_top_left)):
                 if  matching_area_top_left[i] < 0:
@@ -273,7 +288,7 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             # else:
             #         preRes = 0
             #         ges = 0            
-        
+            #
             # f_num = 0
             # for x, y, w, h in face_zone:
             #     f_num = f_num + 1
@@ -282,10 +297,9 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
             # cv2.putText(matching_area, "{}people".format(f_num), (10,50), cv2.FONT_HERSHEY_COMPLEX, 1, (142, 125, 52), 1)
             # cv2.imshow('result', matching_area) # 这里由于显示在frame上有点麻烦  所以直接show出来了
 
-
+            # calculate an exponentially decaying average of fps number
             toc = time.time()
             curr_fps = 1.0 / (toc - tic)
-            # calculate an exponentially decaying average of fps number
             fps = curr_fps if fps == 0.0 else (fps*0.95 + curr_fps*0.05)
             tic = toc
 
@@ -293,14 +307,23 @@ def loop_and_detect(cam, trt_yolo, conf_th, vis):
 
         # cv2.waitKey(0)
         key = cv2.waitKey(1)
-        if key == 27 or key == ord(' '):  # ESC key: quit program
+        if key == 27 or key == ord(' '):
             break
-        elif key == ord('F') or key == ord('f'):  # Toggle fullscreen
+        elif key == ord('F') or key == ord('f'):
             full_scrn = not full_scrn
             set_display(WINDOW_NAME, full_scrn)
 
         frame_cnt += 1
         
+
+def serArd(msg_queue):
+    while True:
+        ser.write(msg_queue.get())
+        response = ser.readline()	#.decode('utf-8')将数据转换成str格式
+        print(response)
+
+        # time.sleep(0.3)
+
 
 def main():
     args = parse_args()
@@ -318,11 +341,15 @@ def main():
     h, w = get_input_shape(args.model)
     trt_yolo = TrtYOLO(args.model, (h, w), args.category_num, args.letter_box)
 
-    open_window(
-        WINDOW_NAME, 'Camera TensorRT YOLO Demo',
-        cam.img_width, cam.img_height)
+    open_window(WINDOW_NAME, 'Camera TensorRT YOLO Demo', cam.img_width, cam.img_height)
     
-    loop_and_detect(cam, trt_yolo, conf_th=0.7, vis=vis)
+    msg_queue = Queue(maxsize=1)
+    
+    msg_queue.put("0, 0, 0, -1".encode())
+    Thread(target=serArd, args=(msg_queue, )).start()
+    loop_and_detect(cam, trt_yolo, msg_queue, conf_th=0.7, vis=vis)
+    while True:
+        pass
 
     cam.release()
     cv2.destroyAllWindows()
