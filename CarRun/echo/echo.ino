@@ -2,41 +2,52 @@
 #include<stdlib.h>
 #include<string.h>
 
-String comdata = "";
+String comdata;
+int rev_data[4];
 
-void dataConvert(int* rev_data, char *rev_string){
-    char *p; 
-    
-    p = strtok(rev_string, ",");
-    
-    int i = 0;
-    while (p){
-        rev_data[i++] = atoi(p);
-        p = strtok(NULL, ",");
-    }
+void dataConvert(int* rev_data, char *rev_string) {
+  char *p;
+  int i;
+  for (i = 0; rev_string[i] != ';' && i < strlen(rev_string); i++);
+
+  rev_string[i] = '\0';
+
+  p = strtok(rev_string, ",");
+
+  i = 0;
+  while (p) {
+    rev_data[i++] = atoi(p);
+    p = strtok(NULL, ",");
+  }
+  char buff[50];
+  for (int i = 0; i < 4; i++) {
+    Serial.print(rev_data[i]);
+    Serial.print(",");
+  }
 }
 
-void setup() 
+void setup()
 {
-  Serial.begin(9600);      //设定的波特率
+  Serial.begin(115200);      //设定的波特率
 }
 
-void loop() 
+void loop()
 {
-   comdata = "";
-   while (Serial.available() > 0){
-        comdata += char(Serial.read());
-        delay(2);
+
+  while (Serial.available() > 0) {
+    char ch = char(Serial.read());
+    if (ch == ';') {
+      while(Serial.available() > 0) Serial.read();
+      dataConvert(rev_data, comdata.c_str());
+      comdata = "";
     }
-    
-   if (comdata.length() > 0){
-       Serial.println(comdata);
+    else
+    {
+      comdata += ch;
     }
-    
-    char rev_string[20];
-    strcpy(rev_string, comdata.c_str());
-    
-    int rev_data[4];
-    dataConvert(rev_data, rev_string);
-    
+   
+  }
+
+  
+
 }

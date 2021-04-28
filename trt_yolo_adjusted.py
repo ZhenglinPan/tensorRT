@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pycuda.autoinit  # This is needed for initializing CUDA driver
 
-# from skimage.measure import compare_ssim
+from skimage.measure import compare_ssim
 from utils.yolo_classes import get_cls_dict
 from utils.camera import add_camera_args, Camera
 from utils.display import open_window, set_display, show_fps
@@ -26,7 +26,7 @@ from threading import Thread
 
 import serial
 port = "/dev/ttyACM0"
-ser = serial.Serial(port,9600,timeout=0)
+ser = serial.Serial(port,115200,timeout=0)
 ser.flushInput()
 
 WINDOW_NAME = 'TrtYOLODemo'
@@ -115,7 +115,7 @@ def person_filter(boxes, confs, clss):
 
 
 # 使用欧式与第一帧目标进行匹配
-def similarity(img1, img2):
+def Euclidean(img1, img2):
     # high similarity at less value
     img1 = cv2.resize(img1, (16, 16))
     img2 = cv2.resize(img2, (16, 16))
@@ -123,15 +123,15 @@ def similarity(img1, img2):
 
 
 # 使用现成的包计算与第一帧的相似度  与欧式二选一
-# def skimageCmp(img1, img2):
-#     img1 = cv2.resize(img1, (16, 16))
-#     img2 = cv2.resize(img2, (16, 16))
-#     img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-#     img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+def skimageCmp(img1, img2):
+    img1 = cv2.resize(img1, (16, 16))
+    img2 = cv2.resize(img2, (16, 16))
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
-#     score, diff = compare_ssim(img1, img2, full=True)
+    score, diff = compare_ssim(img1, img2, full=True)
 
-#     return round(score, 3)
+    return round(score, 3)
 
 
 # 筛选Matching area中的目标
@@ -143,7 +143,7 @@ def find_best_box(boxes, img, tpl):
         mat_list.append(mat)
         
         # 由于scikit-image版本不是1.4.2或1.5.0无法运行
-        sml = similarity(mat, tpl)
+        sml = skimageCmp(mat, tpl)
         sml_list.append(sml)
     
     # print("sml_list", sml_list)
@@ -225,14 +225,16 @@ def loop_and_detect(cam, trt_yolo, msg_queue, conf_th, vis):
 
             #串口数据  定点数转换
             ltx, lty, rbx, rby = box[:4]    # ltx --left top point x
-            shift_x = int(round((ltx + rbx)/(2 * frame_w), 4) * 10000)
-            shift_y = int(round((lty + rby)/(2 * frame_h), 4) * 10000)
+            
+            shift_x = int(round(((ltx + rbx)-frame_w)/(2*frame_w), 4) * 10000)
+            shift_y = int(round(((lty + rby)-frame_h)/(2*frame_h), 4) * 10000)
             area_ratio = int(round((rbx-ltx)*(rby-lty)/(frame_w*frame_h), 4) * 10000)
             ges = -1
             
-            msg = str(shift_x) + ', ' + str(shift_y)+ ', ' + str(area_ratio) + ', ' + str(ges)
+            msg = str(shift_x) + ', ' + str(shift_y)+ ', ' + str(area_ratio) + ', ' + str(ges) + ';'
             print("msg in python:", msg)
-            msg_queue.put(msg.encode())     # 将字符转换为字节发送
+            if msg_queue.empty():
+                msg_queue.put(msg.encode())     # 将字符转换为字节发送
 
             roi = frame[box[1]:box[3], box[0]:box[2]]
             if frame_cnt == START_FRAME + 1:
@@ -321,6 +323,7 @@ def serArd(msg_queue):
         ser.write(msg_queue.get())
         response = ser.readline()	#.decode('utf-8')将数据转换成str格式
         print(response)
+        ser.flush()
 
         # time.sleep(0.3)
 
@@ -343,9 +346,9 @@ def main():
 
     open_window(WINDOW_NAME, 'Camera TensorRT YOLO Demo', cam.img_width, cam.img_height)
     
-    msg_queue = Queue(maxsize=1)
+    msg_queue = Queue(maxsize=100)
     
-    msg_queue.put("0, 0, 0, -1".encode())
+    # msg_queue.put("0,0,0,-1".encode())
     Thread(target=serArd, args=(msg_queue, )).start()
     loop_and_detect(cam, trt_yolo, msg_queue, conf_th=0.7, vis=vis)
     while True:
